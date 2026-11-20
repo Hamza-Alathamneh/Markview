@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Markview
+Comment=Native Markdown editor and preview
+Exec=markview %f
+TryExec=markview
+Icon=markview
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/markdown;text/x-markdown;
+StartupNotify=true

@@ -1,0 +1,11 @@
+{
+  "source": "https://github.com/shd101wyy/vscode-markdown-preview-enhanced",
+  "source_version": "0.8.40",
+  "source_file": "out/native/crossnote-serve.js",
+  "source_sha256": "dc0aa24e907663d83d1a2de73b630a4591062308b83eb1c33705c3624544e21f",
+  "engine_sha256": "357b5ef8059d3933903701bb3f120d9009abe58ddabad102aa98e1104874c096",
+  "changes": [
+    "Expose Notebook, setBuildDirectory, defaultConfig and loadHTML exports.",
+    "Replace CLI autorun with CommonJS exports."
+  ]
+}
