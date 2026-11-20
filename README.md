@@ -1,8 +1,18 @@
 ### Markview
-a simple md file editor that can be used to both edit/preview your file extra features will be added later
+a simple md file editor that can be used to both edit/preview md files with some interesting features.
 
 ### Installation
-it is a simple process just download the release zip file and run the shell script install.sh in your terminal
+
+**linux**
+\`\`\`
+chmod +x install.sh
+./install.sh
+\`\`\`
+
+**windows**
+\`\`\`
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+\`\`\`
 
 >[!warning]
 >this was made using AI
