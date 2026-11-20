@@ -1,7 +1,6 @@
 """A native Markdown editor with embedded Crossnote preview for Qt 6 / Wayland."""
 import argparse
 import codecs
-import os
 from pathlib import Path
 import re
 import sys
@@ -11,10 +10,16 @@ from PySide6.QtGui import (
     QAction, QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QKeySequence,
     QSyntaxHighlighter, QTextCharFormat, QTextDocument,
 )
+from markview_complete import IMAGE_EXTENSIONS, MarkdownEditor
+from markview_settings import (
+    SettingsDialog, load_preferences, resolve_editor_font, resolve_preview_font,
+    save_preferences,
+)
+from markview_spell import SpellChecker
 from markview_theme import THEMES, appearance_settings, apply_theme, saved_theme
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPlainTextEdit, QPushButton, QStackedWidget, QTextBrowser,
+    QMessageBox, QPushButton, QStackedWidget, QTextBrowser,
     QVBoxLayout, QWidget,
 )
 
@@ -22,15 +27,38 @@ from PySide6.QtWidgets import (
 class MarkdownHighlighter(QSyntaxHighlighter):
     theme = 'dark'
 
+    def __init__(self, document, spell=None):
+        super().__init__(document)
+        self.spell = spell
+
     def highlightBlock(self, text):
+        stripped = text.strip()
+        prev = self.previousBlockState()
+        if self.currentBlock().blockNumber() == 0 and stripped == "---":
+            self.setCurrentBlockState(3)
+            self.paint(0, len(text), "#b2a1df")
+            return
+        if prev == 3:
+            self.setCurrentBlockState(0 if stripped in ("---", "...") else 3)
+            self.paint(0, len(text), "#b2a1df")
+            return
         if text.lstrip().startswith(("```", "~~~")):
-            self.setCurrentBlockState(0 if self.previousBlockState() == 1 else 1)
+            self.setCurrentBlockState(0 if prev == 1 else 1)
             self.paint(0, len(text), "#e6be7a")
             return
-        if self.previousBlockState() == 1:
+        if prev == 1:
             self.setCurrentBlockState(1)
             self.paint(0, len(text), "#e6be7a")
             return
+        if stripped == "$$":
+            self.setCurrentBlockState(0 if prev == 2 else 2)
+            self.paint(0, len(text), "#b2a1df")
+            return
+        if prev == 2:
+            self.setCurrentBlockState(2)
+            self.paint(0, len(text), "#b2a1df")
+            return
+
         self.setCurrentBlockState(0)
         for pattern, color, bold in [
             (r"^#{1,6}\s+.*", "#8edbcc", True),
@@ -43,6 +71,10 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             for match in re.finditer(pattern, text):
                 self.paint(match.start(), len(match.group()), color, bold)
 
+        if self.spell is not None:
+            for start, length, _ in self.spell.find_misspelled(text):
+                self.paint_spelling_error(start, length)
+
     def paint(self, start, length, color, bold=False):
         if self.theme == 'light':
             color = {'#e6be7a': '#875206', '#8edbcc': '#176c60', '#acbfe6': '#435c8c',
@@ -53,6 +85,13 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             style.setFontWeight(QFont.Weight.Bold)
         self.setFormat(start, length, style)
 
+    def paint_spelling_error(self, start, length):
+        fmt = QTextCharFormat(self.format(start))
+        fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.SpellCheckUnderline)
+        fmt.setUnderlineColor(QColor("#ff5f6d" if self.theme == "dark" else "#d93025"))
+        fmt.setBackground(QColor(255, 95, 109, 44) if self.theme == "dark" else QColor(217, 48, 37, 32))
+        self.setFormat(start, length, fmt)
+
 
 class MarkdownWindow(QMainWindow):
     def __init__(self, enhanced=True, settings=None):
@@ -60,6 +99,9 @@ class MarkdownWindow(QMainWindow):
         self.enhanced = enhanced
         self.settings = settings if settings is not None else appearance_settings()
         self.theme = saved_theme(self.settings)
+        self.prefs = load_preferences(self.settings)
+        saved_dir = str(self.settings.value("files/last_dir", "") or "")
+        self.last_dir = Path(saved_dir) if saved_dir else None
         self.path = None
         self.original_bytes = b""
         self.newline = "\n"
@@ -82,6 +124,7 @@ class MarkdownWindow(QMainWindow):
         self.add_button(toolbar, "Open…", "Ctrl+O", self.open_dialog)
         self.add_button(toolbar, "Save", "Ctrl+S", self.save_file)
         self.add_button(toolbar, "Save as…", "Ctrl+Shift+S", lambda: self.save_file(True))
+        self.add_button(toolbar, "Settings", "Ctrl+,", self.open_settings)
         toolbar.addStretch()
         self.toggle = QPushButton("Preview")
         self.toggle.setObjectName("toggle")
@@ -122,9 +165,10 @@ class MarkdownWindow(QMainWindow):
         self.search_row.hide()
         layout.addWidget(self.search_row)
         self.shortcut("Ctrl+F", self.show_search)
-        self.shortcut("Escape", self.search_row.hide)
+        self.shortcut("Escape", self.handle_escape)
 
-        self.editor = QPlainTextEdit()
+        self.editor = MarkdownEditor()
+        self.editor.base_dir_provider = lambda: self.path.parent if self.path else Path.cwd()
         self.editor.setAcceptDrops(False)
         self.editor.setAccessibleName("Markdown source")
         self.editor.setPlaceholderText("# Your next idea\n\nWrite Markdown here, then click Preview.")
@@ -133,7 +177,9 @@ class MarkdownWindow(QMainWindow):
         self.editor.setFont(mono)
         self.editor.setTabStopDistance(self.editor.fontMetrics().horizontalAdvance(" ") * 4)
         self.editor.document().setDocumentMargin(24)
-        self.highlighter = MarkdownHighlighter(self.editor.document())
+        self.spell = SpellChecker(settings=self.settings)
+        self.highlighter = MarkdownHighlighter(self.editor.document(), spell=self.spell)
+        self.editor.set_spell_checker(self.spell, self.rehighlight_document)
         if enhanced:
             from markview_preview import EnhancedPreview
             self.preview = EnhancedPreview()
@@ -160,7 +206,43 @@ class MarkdownWindow(QMainWindow):
         self.editor.document().modificationChanged.connect(self.update_info)
         self.editor.document().setModified(False)
         self.refresh_theme()
+        self.apply_preferences(refresh_preview=False)
         self.update_info()
+
+    def open_settings(self):
+        self.editor.hide_completions()
+        # Keep auto_correct synced in case user toggled it from the right-click menu
+        self.prefs.auto_correct = self.spell.auto_correct_enabled
+        dialog = SettingsDialog(self.prefs, theme=self.theme, parent=self)
+        if dialog.exec():
+            self.prefs = dialog.preferences()
+            save_preferences(self.settings, self.prefs)
+            self.apply_preferences(refresh_preview=True)
+
+    def _apply_fonts(self):
+        editor_font = resolve_editor_font(self.prefs)
+        self.editor.setFont(editor_font)
+        self.editor.document().setDefaultFont(editor_font)
+        self.editor.setTabStopDistance(self.editor.fontMetrics().horizontalAdvance(" ") * 4)
+        if self.enhanced:
+            self.preview.set_font(self.prefs.preview_font_family, self.prefs.preview_font_size)
+        else:
+            preview_font = resolve_preview_font(self.prefs)
+            self.preview.setFont(preview_font)
+            self.preview.document().setDefaultFont(preview_font)
+
+    def apply_preferences(self, refresh_preview=True):
+        self._apply_fonts()
+
+        self.spell.enabled = (self.prefs.spelling_mode != 'off')
+        self.spell.auto_correct_enabled = self.prefs.auto_correct and self.spell.enabled
+        self.editor.apply_preferences(self.prefs)
+
+        self.rehighlight_document()
+        if refresh_preview and self.toggle.isChecked():
+            self.preview_scroll = (self.preview.capture_scroll() if self.enhanced
+                                   else self.preview.verticalScrollBar().value())
+            self.set_preview(True)
 
     def toggle_theme(self):
         self.theme = 'light' if self.theme == 'dark' else 'dark'
@@ -168,13 +250,24 @@ class MarkdownWindow(QMainWindow):
         self.settings.sync()
         self.refresh_theme()
 
+    def handle_escape(self):
+        if self.editor.completions_visible():
+            self.editor.hide_completions()
+        else:
+            self.search_row.hide()
+
+    def rehighlight_document(self):
+        modified = self.editor.document().isModified()
+        self.highlighter.rehighlight()
+        self.editor.document().setModified(modified)
+
     def refresh_theme(self):
         apply_theme(QApplication.instance(), self.theme)
         self.theme_button.setText('Light mode' if self.theme == 'dark' else 'Dark mode')
-        modified = self.editor.document().isModified()
+        self._apply_fonts()
+        self.editor.apply_theme(self.theme)
         self.highlighter.theme = self.theme
-        self.highlighter.rehighlight()
-        self.editor.document().setModified(modified)
+        self.rehighlight_document()
         if self.enhanced:
             self.preview.set_theme(self.theme)
         else:
@@ -213,17 +306,18 @@ class MarkdownWindow(QMainWindow):
         self.status.setText(
             f"{mode}   ·   {len(self.editor.toPlainText().split()):,} words"
             f"   ·   Ln {cursor.blockNumber() + 1}, Col {cursor.positionInBlock() + 1}"
-            "   ·   UTF-8   ·   Ctrl+E: switch view"
+            "   ·   UTF-8   ·   Ctrl+E: switch view   ·   Ctrl+Space: complete"
         )
 
     def set_preview(self, enabled):
         if enabled:
+            self.editor.hide_completions()
             base = self.path.parent if self.path else Path.cwd()
             if self.enhanced:
                 self.preview.show_markdown(self.editor.toPlainText(),
                                            self.path or base / 'Untitled.md', self.preview_scroll)
             else:
-                self.preview.document().setBaseUrl(QUrl.fromLocalFile(str(base) + os.sep))
+                self.preview.document().setBaseUrl(QUrl.fromLocalFile(base.as_posix().rstrip('/') + '/'))
                 self.preview.setMarkdown(self.editor.toPlainText())
             self.pages.setCurrentWidget(self.preview)
             if not self.enhanced:
@@ -255,6 +349,7 @@ class MarkdownWindow(QMainWindow):
     def new_file(self):
         if not self.confirm_discard():
             return
+        self.editor.hide_completions()
         self.path, self.original_bytes, self.newline, self.bom = None, b"", "\n", False
         self.editor.setPlainText("")
         self.editor.document().setModified(False)
@@ -263,9 +358,22 @@ class MarkdownWindow(QMainWindow):
         self.preview_scroll = 0
         self.update_info()
 
+    def _remember_dir(self, directory: Path):
+        if directory and directory.is_dir():
+            self.last_dir = directory
+            self.settings.setValue("files/last_dir", str(directory))
+            self.settings.sync()
+
+    def _dialog_dir(self) -> Path:
+        if self.path and self.path.parent.is_dir():
+            return self.path.parent
+        if self.last_dir and self.last_dir.is_dir():
+            return self.last_dir
+        return Path.home()
+
     def open_dialog(self):
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Open Markdown", str(self.path.parent if self.path else Path.home()),
+            self, "Open Markdown", str(self._dialog_dir()),
             "Markdown (*.md *.markdown *.mdown *.mkd);;Text files (*.txt);;All files (*)",
         )
         if filename:
@@ -281,7 +389,9 @@ class MarkdownWindow(QMainWindow):
             return False
         if not self.confirm_discard():
             return False
+        self.editor.hide_completions()
         self.path, self.original_bytes = path, data
+        self._remember_dir(path.parent)
         self.bom = data.startswith(codecs.BOM_UTF8)
         self.newline = "\r\n" if b"\r\n" in data else ("\r" if b"\r" in data else "\n")
         self.editor.setPlainText(content.replace("\r\n", "\n").replace("\r", "\n"))
@@ -294,7 +404,7 @@ class MarkdownWindow(QMainWindow):
         target = self.path
         if target is None or save_as:
             filename, _ = QFileDialog.getSaveFileName(
-                self, "Save Markdown", str(target or Path.home() / "Untitled.md"),
+                self, "Save Markdown", str(target or (self._dialog_dir() / "Untitled.md")),
                 "Markdown (*.md);;All files (*)",
             )
             if not filename:
@@ -335,6 +445,7 @@ class MarkdownWindow(QMainWindow):
             QMessageBox.critical(self, "Cannot save file", output.errorString())
             return False
         self.path, self.original_bytes = target, data
+        self._remember_dir(target.parent)
         self.editor.document().setModified(False)
         if self.toggle.isChecked():
             self.set_preview(True)
@@ -391,8 +502,25 @@ class MarkdownWindow(QMainWindow):
 
     def dropEvent(self, event):
         urls = event.mimeData().urls()
-        if len(urls) == 1 and urls[0].isLocalFile() and self.load_file(urls[0].toLocalFile()):
-            event.acceptProposedAction()
+        if len(urls) == 1 and urls[0].isLocalFile():
+            dropped = Path(urls[0].toLocalFile())
+            if dropped.suffix.lower() in IMAGE_EXTENSIONS:
+                self.insert_image_path(dropped)
+                event.acceptProposedAction()
+            elif self.load_file(dropped):
+                event.acceptProposedAction()
+
+    def insert_image_path(self, image_path: Path):
+        target = image_path.resolve()
+        base = self.path.parent if self.path else Path.cwd()
+        try:
+            rel = target.relative_to(base.resolve()).as_posix()
+        except ValueError:
+            rel = target.as_posix()
+        dest = f"<{rel}>" if " " in rel else rel
+        self.editor.insertPlainText(f"![{target.stem}]({dest})")
+        if self.toggle.isChecked():
+            self.set_preview(True)
 
     def closeEvent(self, event):
         if self.confirm_discard():
@@ -404,6 +532,12 @@ class MarkdownWindow(QMainWindow):
 
 
 def configure_app(app):
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Markview.Markview")
+        except (AttributeError, OSError):
+            pass
     app.setApplicationName("Markview")
     app.setDesktopFileName("markview")
     icon_path = Path(__file__).resolve().parent / "markview-files" / "icon.png"
@@ -424,7 +558,8 @@ def main():
         try:
             import markview_preview
         except ImportError as error:
-            parser.exit(1, f"Enhanced preview needs Qt WebEngine: {error}\nInstall: sudo dnf install python3-pyside6 qt6-qtwebengine\nOr launch with --basic.\n")
+            hint = "pip install PySide6" if sys.platform == "win32" else "sudo dnf install python3-pyside6 qt6-qtwebengine"
+            parser.exit(1, f"Enhanced preview needs Qt WebEngine: {error}\nInstall: {hint}\nOr launch with --basic.\n")
     app = QApplication([sys.argv[0]])
     configure_app(app)
     window = MarkdownWindow(enhanced=not args.basic)
@@ -433,3 +568,7 @@ def main():
     window.toggle.setChecked(args.preview)
     window.show()
     return app.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

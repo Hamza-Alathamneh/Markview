@@ -8,7 +8,7 @@ from PySide6.QtCore import QUrl, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWebEngineCore import (
     QWebEnginePage, QWebEngineProfile, QWebEngineSettings,
-    QWebEngineUrlRequestInterceptor,
+    QWebEngineUrlRequestInfo, QWebEngineUrlRequestInterceptor,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -18,8 +18,15 @@ from markview_theme import THEMES
 
 class LocalResources(QWebEngineUrlRequestInterceptor):
     def interceptRequest(self, info):
-        if info.requestUrl().scheme() not in {'file', 'data', 'about', 'blob', 'qrc'}:
-            info.block(True)
+        scheme = info.requestUrl().scheme()
+        if scheme in {'file', 'data', 'about', 'blob', 'qrc'}:
+            return
+        if scheme in {'http', 'https'} and info.resourceType() in {
+            QWebEngineUrlRequestInfo.ResourceType.ResourceTypeImage,
+            QWebEngineUrlRequestInfo.ResourceType.ResourceTypeMedia,
+        }:
+            return
+        info.block(True)
 
 
 class PreviewPage(QWebEnginePage):
@@ -42,6 +49,8 @@ class EnhancedPreview(QWebEngineView):
         super().__init__(parent)
         self.setAccessibleName('Markdown Preview Enhanced')
         self.theme = 'dark'
+        self.font_family = ''
+        self.font_size = 12
         self.profile = QWebEngineProfile(self)
         self.interceptor = LocalResources(self.profile)
         self.profile.setUrlRequestInterceptor(self.interceptor)
@@ -50,14 +59,15 @@ class EnhancedPreview(QWebEngineView):
         page.linkClicked.connect(self.anchorClicked)
         page.setBackgroundColor(QColor('#0d1117'))
         settings = page.settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
-        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, False)
         self.renderer = Renderer(self)
         self.renderer.rendered.connect(self._rendered)
         self.renderer.failed.connect(self.show_error)
-        self.temporary = tempfile.TemporaryDirectory(prefix='markview-preview-')
+        self.temporary = tempfile.TemporaryDirectory(prefix='markview-preview-', ignore_cleanup_errors=True)
         self.generation = 0
         self.scroll_y = 0
         self.base = QUrl()
@@ -68,14 +78,18 @@ class EnhancedPreview(QWebEngineView):
         self.cancel()
         self.generation += 1
         self.scroll_y = scroll
-        self.base = QUrl.fromLocalFile(str(Path(filename).parent) + '/')
+        self.base = QUrl.fromLocalFile(Path(filename).parent.as_posix().rstrip('/') + '/')
         self.renderStatus.emit('Rendering enhanced preview…')
         self.setHtml(self.message_page('Rendering preview…'))
-        self.renderer.render(source, filename, self.theme)
+        self.renderer.render(source, filename, self.theme, self.font_family, self.font_size)
 
     def set_theme(self, theme):
         self.theme = theme
         self.page().setBackgroundColor(QColor(THEMES[theme]['web_base']))
+
+    def set_font(self, family, size):
+        self.font_family = family or ''
+        self.font_size = int(size) if size else 12
 
     def message_page(self, content):
         c = THEMES[self.theme]

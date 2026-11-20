@@ -17,23 +17,29 @@ fi
 
 mkdir -p "$APP_DIR/markview-files" "$APPLICATIONS_DIR" "$ICONS_DIR"
 
-cp "$SCRIPT_DIR/markview" "$APP_DIR/markview"
-cp "$SCRIPT_DIR/markview_app.py" "$APP_DIR/markview_app.py"
-cp "$SCRIPT_DIR/markview_preview.py" "$APP_DIR/markview_preview.py"
-cp "$SCRIPT_DIR/markview_renderer.py" "$APP_DIR/markview_renderer.py"
-cp "$SCRIPT_DIR/markview_theme.py" "$APP_DIR/markview_theme.py"
-cp "$SCRIPT_DIR/markview-files/render.cjs" "$APP_DIR/markview-files/render.cjs"
-cp "$SCRIPT_DIR/markview-files/icon.png" "$APP_DIR/markview-files/icon.png"
-chmod 644 "$APP_DIR/markview-files/icon.png"
+if [ "$(cd "$SCRIPT_DIR" && pwd -P)" != "$(cd "$APP_DIR" && pwd -P)" ]; then
+  cp "$SCRIPT_DIR/markview" "$APP_DIR/markview"
+  cp "$SCRIPT_DIR/markview_app.py" "$APP_DIR/markview_app.py"
+  cp "$SCRIPT_DIR/markview_complete.py" "$APP_DIR/markview_complete.py"
+  cp "$SCRIPT_DIR/markview_preview.py" "$APP_DIR/markview_preview.py"
+  cp "$SCRIPT_DIR/markview_renderer.py" "$APP_DIR/markview_renderer.py"
+  cp "$SCRIPT_DIR/markview_settings.py" "$APP_DIR/markview_settings.py"
+  cp "$SCRIPT_DIR/markview_spell.py" "$APP_DIR/markview_spell.py"
+  cp "$SCRIPT_DIR/markview_theme.py" "$APP_DIR/markview_theme.py"
+  cp "$SCRIPT_DIR/markview-files/render.cjs" "$APP_DIR/markview-files/render.cjs"
+  cp "$SCRIPT_DIR/markview-files/en_words.txt.gz" "$APP_DIR/markview-files/en_words.txt.gz"
+  cp "$SCRIPT_DIR/markview-files/icon.png" "$APP_DIR/markview-files/icon.png"
+  chmod 644 "$APP_DIR/markview-files/icon.png"
 
-rm -rf "$APP_DIR/markview-files/vendor"
-cp -a "$SCRIPT_DIR/markview-files/vendor" "$APP_DIR/markview-files/vendor"
+  rm -rf "$APP_DIR/markview-files/vendor"
+  cp -a "$SCRIPT_DIR/markview-files/vendor" "$APP_DIR/markview-files/vendor"
+fi
 
 PYTHON_SHEBANG="#!/usr/bin/env python3"
 if ! python3 -c "import PySide6.QtWebEngineWidgets" >/dev/null 2>&1; then
   python3 -m venv "$APP_DIR/.venv"
-  "$APP_DIR/.venv/bin/pip" install --upgrade pip
-  "$APP_DIR/.venv/bin/pip" install -r "$SCRIPT_DIR/requirements.txt"
+  "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check -q --upgrade pip
+  "$APP_DIR/.venv/bin/pip" install --disable-pip-version-check -q -r "$SCRIPT_DIR/requirements.txt"
   PYTHON_SHEBANG="#!$APP_DIR/.venv/bin/python3"
 fi
 

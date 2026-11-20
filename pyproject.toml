@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "markview"
-version = "0.1.0"
+version = "1.0.0"
 description = "a simple MD file viewer"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -15,4 +15,4 @@ dependencies = ["PySide6>=6.11.2"]
 markview = "markview_app:main"
 
 [tool.setuptools]
-py-modules = ["markview_app", "markview_preview", "markview_renderer", "markview_theme"]
+py-modules = ["markview_app", "markview_complete", "markview_preview", "markview_renderer", "markview_settings", "markview_spell", "markview_theme"]
