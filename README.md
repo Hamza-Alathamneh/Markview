@@ -3,15 +3,15 @@ a simple md file editor that can be used to both edit/preview md files with some
 
 ### Installation
 
-**linux**
-\`\`\`
-chmod +x install.sh
-./install.sh
+**linux**<br>
+\`\`\`<br>
+chmod +x <br> install.sh
+./install.sh<br>
 \`\`\`
 
-**windows**
-\`\`\`
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+**windows**<br>
+\`\`\`<br>
+powershell -ExecutionPolicy Bypass -File .\install.ps1<br>
 \`\`\`
 
 >[!warning]
